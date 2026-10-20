@@ -5,6 +5,23 @@ SQLite, and reports new ads and changed prices. The default search is
 <https://www.olx.ua/uk/list/q-Wooting-60HE/>. No authentication or JavaScript
 browser is needed.
 
+## TL;DR
+
+```bash
+git clone https://github.com/redmoondz/olx-watch.git
+cd olx-watch
+uv venv .venv && uv pip install --python .venv/bin/python -r requirements.txt
+.venv/bin/python olx_watch.py --once                      # one poll
+.venv/bin/python olx_watch.py --once --json               # machine-readable
+```
+
+Watching real Wooting 60HE keyboards only, ignoring paid placements:
+
+```bash
+.venv/bin/python olx_watch.py --once \
+  --cookies-file cookies.txt --exclude-promoted --only-wooting-60he
+```
+
 ## Setup
 
 Python 3.10+ is required. From the project directory:
@@ -37,6 +54,7 @@ offline tests. No paid API is used.
 | `--export NEW.csv` | Disabled | Overwrite a UTF-8 CSV containing this run's new ads |
 | `--cookies-file PATH` | Disabled | Netscape or `name=value` cookie export sent with every request |
 | `--exclude-promoted` | Off | Skip paid ("promoted") ads so counts match organic results |
+| `--only-wooting-60he` | Off | Keep only Wooting 60HE/60HE+/v2 boards, drop switches and accessories |
 
 The first successful poll creates a baseline and prints:
 
@@ -160,14 +178,64 @@ The last command is a real network smoke check and changes only the selected
 SQLite database. Repeating it against the same database checks steady-state
 behavior. The Pyright configuration points at `.venv` for installed dependencies.
 
-## Cookies and promoted ads
+## Filters
 
-Anonymous requests answer with an empty `location` object and a slightly
-different ad mix, and a browser session can differ from the API answer. Export
-cookies from the logged-in browser (Netscape format, e.g. the "Get cookies.txt"
-extension) to `cookies.txt`; the file is git-ignored and must stay `chmod 600`.
+Three independent filters, all off by default so the CLI stays a plain watcher.
 
-`isPromoted` marks paid placements. `--exclude-promoted` drops them from
-storage and reporting, which is what the "organic only" view looks like.
-`run_hourly.sh` passes `--cookies-file cookies.txt` when that file exists and
-always filters promoted ads.
+### `--only-wooting-60he`
+
+The search `q-Wooting-60HE` returns more than keyboards: switch samples,
+modding kits, wrist rests, consultations, and other brands pulled in by seller
+keywords. This filter keeps an ad only when the title names Wooting
+(`wooting`, `вутинг`, `вутінг`) **and** a 60HE model, while rejecting titles
+that match accessory words (`свитч`, `switch`, `комплект`, `моддинг`, `wrist`,
+`keycap`, `кабель`, `консультац`, `кейс`).
+
+On a live run it cut 63 results to 16 boards. It is intentionally
+title-based — a listing that mentions 60HE only in the description is dropped.
+80HE-only boards are dropped; a title mixing both (`80HE | 60HE+ Zinc`) passes.
+
+### `--exclude-promoted`
+
+OLX mixes `isPromoted: true` placements into the first page and duplicates
+them. Dropping them makes the count match the organic result a human sees.
+Promoted ads are then neither stored nor reported, so they never appear as
+"new" later.
+
+### `--cookies-file PATH`
+
+Anonymous responses come back with an empty `location` object and a slightly
+different ad mix. A logged-in cookie export fixes the cities/regions and
+stabilizes the session. Accepts Netscape (`#HttpOnly_` lines included) and
+plain `name=value` exports.
+
+```bash
+# export once from the browser, then
+chmod 600 cookies.txt
+.venv/bin/python olx_watch.py --once --cookies-file cookies.txt
+```
+
+Cookies expire; when cities go blank or requests start returning 403, export
+again. `cookies.txt` is git-ignored — never commit it.
+
+## Hourly cron wrapper
+
+`run_hourly.sh` is a ready-made wrapper: it polls with all filters, keeps
+`logs/poll.log` under 2 MB, and delivers new ads to Telegram through the
+channel API — no LLM and no model provider in the loop.
+
+```bash
+# crontab -e
+5 * * * * /path/to/olx-watch/run_hourly.sh >> /path/to/olx-watch/logs/cron.out 2>&1
+```
+
+Notifications are sent only when something new appears or the poll fails, so a
+quiet hour produces no message. The send path is:
+
+```bash
+openclaw message send --channel telegram --target <chat_id> --message "..."
+```
+
+If you do not use OpenClaw, replace that block with `curl` against the Telegram
+Bot API or any notifier; the script's contract is simply "stdout contains
+`NEW:` blocks when there is news".

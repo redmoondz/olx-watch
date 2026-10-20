@@ -3,6 +3,7 @@
 import csv
 import json
 import sqlite3
+from datetime import UTC
 from pathlib import Path
 
 import httpx
@@ -335,10 +336,10 @@ def test_export_failure_does_not_consume_new_ads(tmp_path, capsys):
 
 
 def test_retry_after_http_date():
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime, timedelta
     from email.utils import format_datetime
 
-    retry_at = datetime.now(timezone.utc) + timedelta(seconds=60)
+    retry_at = datetime.now(UTC) + timedelta(seconds=60)
     response = httpx.Response(429, headers={"Retry-After": format_datetime(retry_at)})
     assert 58 < watch.retry_delay(response, 0) <= 60
     assert (

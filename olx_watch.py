@@ -12,7 +12,7 @@ import time
 from collections.abc import Callable, Sequence
 from contextlib import closing
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any
@@ -241,7 +241,7 @@ def retry_delay(response: httpx.Response | None, attempt: int) -> float:
         except ValueError:
             try:
                 date = parsedate_to_datetime(header)
-                seconds = (date - datetime.now(timezone.utc)).total_seconds()
+                seconds = (date - datetime.now(UTC)).total_seconds()
             except (TypeError, ValueError, OverflowError):
                 seconds = 0
         delay = max(delay, seconds)
@@ -556,7 +556,7 @@ def main(
     """Run one poll and return 0 (success), 1 (fatal), or 2 (partial)."""
     args = arguments(argv)
     result: dict[str, Any] = {
-        "run_at": datetime.now(timezone.utc).isoformat(),
+        "run_at": datetime.now(UTC).isoformat(),
         "query_url": args.url,
         "total": 0,
         "new": [],
