@@ -326,6 +326,28 @@ def initialize_database(db: sqlite3.Connection) -> None:
     """)
 
 
+WOOTING_KEYBOARD = re.compile(
+    r"wooting|вутинг|вутінг", re.IGNORECASE
+)
+NON_KEYBOARD = re.compile(
+    r"свитч|світч|switch|комплект|моддинг|моддінг|моддинг|wrist|keycap|кейкап|"
+    r"кабель|консультац|прокладк|стабилиз|стабіліз|кейс|case",
+    re.IGNORECASE,
+)
+MODEL_60HE = re.compile(
+    r"60\s*-?\s*he|60he", re.IGNORECASE
+)
+
+
+def is_wooting_60he_keyboard(title: str) -> bool:
+    """True when a title names a Wooting 60HE board rather than an accessory."""
+    if not WOOTING_KEYBOARD.search(title):
+        return False
+    if NON_KEYBOARD.search(title):
+        return False
+    return bool(MODEL_60HE.search(title))
+
+
 def store_ads(
     db: sqlite3.Connection,
     ads: list[Ad],
@@ -345,6 +367,10 @@ def store_ads(
         result["first_run"] = first_run
         for item in ads:
             if result.get("exclude_promoted") and item.promoted:
+                continue
+            if result.get("only_wooting_60he") and not is_wooting_60he_keyboard(
+                item.title
+            ):
                 continue
             previous = db.execute(
                 "SELECT price_value, price_currency FROM ads WHERE id=?", (item.id,)
@@ -502,6 +528,11 @@ def arguments(argv: Sequence[str] | None) -> argparse.Namespace:
         help="Netscape/header cookie file sent with each request (keeps sessions stable)",
     )
     parser.add_argument(
+        "--only-wooting-60he",
+        action="store_true",
+        help="Keep only Wooting 60HE/60HE+/v2 keyboards, dropping accessories",
+    )
+    parser.add_argument(
         "--exclude-promoted",
         action="store_true",
         help="Drop promoted (paid) ads so output matches the organic search result",
@@ -535,6 +566,7 @@ def main(
         "known": 0,
         "parsed_pages": 0,
         "exclude_promoted": args.exclude_promoted,
+        "only_wooting_60he": args.only_wooting_60he,
     }
     code = 1
     try:
