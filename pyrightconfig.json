@@ -1,0 +1,6 @@
+{
+  "venvPath": ".",
+  "venv": ".venv",
+  "include": ["olx_watch.py", "tests"],
+  "pythonVersion": "3.14"
+}
