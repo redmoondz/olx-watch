@@ -35,6 +35,8 @@ offline tests. No paid API is used.
 | `--json` | Off | Write one JSON object to stdout |
 | `--include-description` | Off | Include descriptions in new-ad output and CSV |
 | `--export NEW.csv` | Disabled | Overwrite a UTF-8 CSV containing this run's new ads |
+| `--cookies-file PATH` | Disabled | Netscape or `name=value` cookie export sent with every request |
+| `--exclude-promoted` | Off | Skip paid ("promoted") ads so counts match organic results |
 
 The first successful poll creates a baseline and prints:
 
@@ -42,7 +44,8 @@ The first successful poll creates a baseline and prints:
 Baseline created: 63 ads stored.
 ```
 
-It stores all observed active ads without reporting them as new. An empty
+It stores all observed active ads (minus promoted ads when
+`--exclude-promoted` is set) without reporting them as new. An empty
 successful listing also establishes a baseline. Fatal polls do not establish
 one. A partial first poll establishes a baseline for the pages that succeeded;
 ads first observed on later polls are then reported as new.
@@ -156,3 +159,15 @@ uvx pyright
 The last command is a real network smoke check and changes only the selected
 SQLite database. Repeating it against the same database checks steady-state
 behavior. The Pyright configuration points at `.venv` for installed dependencies.
+
+## Cookies and promoted ads
+
+Anonymous requests answer with an empty `location` object and a slightly
+different ad mix, and a browser session can differ from the API answer. Export
+cookies from the logged-in browser (Netscape format, e.g. the "Get cookies.txt"
+extension) to `cookies.txt`; the file is git-ignored and must stay `chmod 600`.
+
+`isPromoted` marks paid placements. `--exclude-promoted` drops them from
+storage and reporting, which is what the "organic only" view looks like.
+`run_hourly.sh` passes `--cookies-file cookies.txt` when that file exists and
+always filters promoted ads.

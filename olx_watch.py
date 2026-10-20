@@ -42,6 +42,7 @@ CSV_FIELDS = [
     "location",
     "region",
     "created_time",
+    "promoted",
 ]
 
 
@@ -66,6 +67,7 @@ class Ad:
     location: str
     region: str
     created_time: str
+    promoted: bool
     description: str
     raw: dict[str, Any]
 
@@ -111,6 +113,7 @@ def normalize_ad(raw: dict[str, Any], query_url: str) -> Ad:
             location=str(location.get("cityName") or ""),
             region=str(location.get("regionName") or ""),
             created_time=str(raw.get("createdTime") or ""),
+            promoted=raw.get("isPromoted") is True,
             description=str(raw.get("description") or ""),
             raw=raw,
         )
@@ -245,10 +248,32 @@ def retry_delay(response: httpx.Response | None, attempt: int) -> float:
     return delay
 
 
+def load_cookies(path: str | None) -> str:
+    """Read a browser cookie export into a single Cookie request header."""
+    if not path:
+        return ""
+    pairs: list[str] = []
+    for line in Path(path).read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        if line.startswith("#HttpOnly_"):
+            line = line[len("#HttpOnly_") :]
+        elif line.startswith("#"):
+            continue
+        fields = line.split("\t")
+        if len(fields) >= 7:
+            pairs.append(f"{fields[5]}={fields[6]}")
+        elif "=" in line:
+            pairs.append(line.rstrip(";"))
+    return "; ".join(pairs)
+
+
 def fetch_page(
     client: httpx.Client,
     url: str,
     *,
+    headers: dict[str, str] | None = None,
     sleep: Callable[[float], Any] = time.sleep,
 ) -> ListingPage:
     """Fetch and parse with three total attempts; retry transient failures."""
@@ -257,7 +282,10 @@ def fetch_page(
         response = None
         try:
             response = client.get(
-                url, headers=HEADERS, timeout=30, follow_redirects=True
+                url,
+                headers=headers or HEADERS,
+                timeout=30,
+                follow_redirects=True,
             )
             response.raise_for_status()
             return parse_page(response.text, url)
@@ -283,7 +311,7 @@ def initialize_database(db: sqlite3.Connection) -> None:
             id INTEGER PRIMARY KEY, first_seen TEXT, last_seen TEXT,
             title TEXT, url TEXT, price_value REAL, price_currency TEXT,
             price_display TEXT, location TEXT, region TEXT, created_time TEXT,
-            active INTEGER, raw_json TEXT
+            active INTEGER, promoted INTEGER DEFAULT 0, raw_json TEXT
         );
         CREATE TABLE IF NOT EXISTS runs (
             id INTEGER PRIMARY KEY AUTOINCREMENT, run_at TEXT, total INTEGER,
@@ -316,6 +344,8 @@ def store_ads(
         first_run = not initialized and not has_ads
         result["first_run"] = first_run
         for item in ads:
+            if result.get("exclude_promoted") and item.promoted:
+                continue
             previous = db.execute(
                 "SELECT price_value, price_currency FROM ads WHERE id=?", (item.id,)
             ).fetchone()
@@ -341,14 +371,15 @@ def store_ads(
                 )
             db.execute(
                 """
-                INSERT INTO ads VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO ads VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     last_seen=excluded.last_seen, title=excluded.title,
                     url=excluded.url, price_value=excluded.price_value,
                     price_currency=excluded.price_currency,
                     price_display=excluded.price_display, location=excluded.location,
                     region=excluded.region, created_time=excluded.created_time,
-                    active=excluded.active, raw_json=excluded.raw_json
+                    active=excluded.active, promoted=excluded.promoted,
+                    raw_json=excluded.raw_json
             """,
                 (
                     item.id,
@@ -363,6 +394,7 @@ def store_ads(
                     item.region,
                     item.created_time,
                     1,
+                    int(item.promoted),
                     json.dumps(item.raw, ensure_ascii=False),
                 ),
             )
@@ -389,7 +421,10 @@ def record_run(db: sqlite3.Connection, result: dict[str, Any]) -> None:
 
 
 def collect(
-    client: httpx.Client, url: str, max_pages: int
+    client: httpx.Client,
+    url: str,
+    max_pages: int,
+    headers: dict[str, str] | None = None,
 ) -> tuple[list[Ad], int, list[str], int]:
     """Visit available pages, tolerating failures and deduplicating across pages."""
     ads: dict[int, Ad] = {}
@@ -400,7 +435,7 @@ def collect(
     number = 1
     while number <= limit:
         try:
-            parsed = fetch_page(client, page_url(url, number))
+            parsed = fetch_page(client, page_url(url, number), headers=headers)
         except FetchError as exc:
             errors.append(f"Page {number}: {exc}")
         else:
@@ -461,6 +496,16 @@ def arguments(argv: Sequence[str] | None) -> argparse.Namespace:
     parser.add_argument("--json", action="store_true", dest="as_json")
     parser.add_argument("--include-description", action="store_true")
     parser.add_argument("--export", metavar="NEW.csv")
+    parser.add_argument(
+        "--cookies-file",
+        metavar="PATH",
+        help="Netscape/header cookie file sent with each request (keeps sessions stable)",
+    )
+    parser.add_argument(
+        "--exclude-promoted",
+        action="store_true",
+        help="Drop promoted (paid) ads so output matches the organic search result",
+    )
     args = parser.parse_args(argv)
     if args.max_pages < 1:
         parser.error("--max-pages must be at least 1")
@@ -469,6 +514,8 @@ def arguments(argv: Sequence[str] | None) -> argparse.Namespace:
         parser.error("--url must be an absolute HTTP(S) URL")
     if parts.username or parts.password:
         parser.error("--url must not contain credentials")
+    if args.cookies_file and not Path(args.cookies_file).is_file():
+        parser.error(f"--cookies-file does not exist: {args.cookies_file}")
     return args
 
 
@@ -487,15 +534,20 @@ def main(
         "first_run": False,
         "known": 0,
         "parsed_pages": 0,
+        "exclude_promoted": args.exclude_promoted,
     }
     code = 1
     try:
         with closing(sqlite3.connect(args.db, timeout=30)) as db:
             initialize_database(db)
             if client is None:
+                headers = dict(HEADERS)
+                cookies = load_cookies(args.cookies_file)
+                if cookies:
+                    headers["Cookie"] = cookies
                 with httpx.Client() as owned_client:
                     ads, total, errors, parsed = collect(
-                        owned_client, args.url, args.max_pages
+                        owned_client, args.url, args.max_pages, headers=headers
                     )
             else:
                 ads, total, errors, parsed = collect(client, args.url, args.max_pages)

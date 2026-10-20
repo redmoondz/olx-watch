@@ -10,3 +10,6 @@ logs/
 *.sqlite3
 *.sqlite3-*
 *.csv
+
+# session cookies (never commit)
+cookies.txt

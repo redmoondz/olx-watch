@@ -3,7 +3,9 @@
 set -uo pipefail
 cd /home/redmoon/projects/olx-watch || exit 1
 ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-out="$(.venv/bin/python olx_watch.py --once 2>&1)"
+extra=()
+[ -f cookies.txt ] && extra+=(--cookies-file cookies.txt)
+out="$(.venv/bin/python olx_watch.py --once --exclude-promoted "${extra[@]}" 2>&1)"
 code=$?
 printf '%s [exit=%d]\n%s\n' "$ts" "$code" "$out" >> logs/poll.log
 # keep log under ~2MB

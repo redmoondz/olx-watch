@@ -366,3 +366,32 @@ def test_request_headers_timeout_and_baseline_human(tmp_path, capsys):
     with mock_client(handler) as client:
         assert watch.main(["--db", str(tmp_path / "ads.sqlite3")], client=client) == 0
     assert capsys.readouterr().out == "Baseline created: 1 ads stored.\n"
+
+
+def test_promoted_flag_and_cookie_loader(tmp_path):
+    """Promoted ads are flagged and cookie exports become a Cookie header."""
+    from olx_watch import load_cookies, normalize_ad
+
+    ad = normalize_ad(
+        {
+            "id": 1,
+            "title": "Wooting 60HE",
+            "url": "https://www.olx.ua/d/uk/obyavlenie/x.html",
+            "isPromoted": True,
+            "price": {"regularPrice": {"value": 5499, "currencyCode": "UAH"}},
+            "location": {"cityName": "Київ", "regionName": "Київська область"},
+        },
+        "https://www.olx.ua/uk/list/q-Wooting-60HE/",
+    )
+    assert ad.promoted is True
+    assert ad.public()["promoted"] is True
+
+    jar = tmp_path / "cookies.txt"
+    jar.write_text(
+        "# Netscape HTTP Cookie File\n"
+        "#HttpOnly_.olx.ua\tTRUE\t/\tTRUE\t0\tdatadome\tabc\n"
+        ".olx.ua\tTRUE\t/\tTRUE\t0\tlang\tuk\n",
+        encoding="utf-8",
+    )
+    assert load_cookies(str(jar)) == "datadome=abc; lang=uk"
+    assert load_cookies(None) == ""
